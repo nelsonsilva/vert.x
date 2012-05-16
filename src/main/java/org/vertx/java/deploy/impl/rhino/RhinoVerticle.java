@@ -19,6 +19,7 @@ package org.vertx.java.deploy.impl.rhino;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.Function;
 import org.mozilla.javascript.Script;
+import org.mozilla.javascript.ScriptRuntime;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
 import org.mozilla.javascript.commonjs.module.ModuleScript;
@@ -77,6 +78,14 @@ public class RhinoVerticle extends Verticle {
     ScriptableObject.putProperty(scope, "stderr", jsStderr);
   }
 
+  private static int addNodeModulesPath(Context cx, URI uri, Scriptable paths) {
+    int length = (int) ScriptRuntime.toUint32(ScriptableObject.getProperty(paths, "length"));
+    if(new File(uri.getPath(), "node_modules").exists()) {
+      ScriptRuntime.setObjectIndex(paths, length++, new File(uri.getPath()).toURI().resolve("node_modules"), cx);
+    }
+    return length;
+  }
+
   private static Require installRequire(final ClassLoader cl, Context cx, ScriptableObject scope){
     RequireBuilder rb = new RequireBuilder();
     rb.setSandboxed(false);
@@ -95,10 +104,35 @@ public class RhinoVerticle extends Verticle {
                   return super.getModuleScript(cx, moduleId, uri, paths);
                 }
 
+                // Try to resolve from require.paths
+                if(paths != null && uri == null) {
+
+                  int length = addNodeModulesPath(cx, new File("").toURI(), paths);
+
+                  for(int i = 0; i < length; ++i) {
+                    String path = ScriptableObject.getTypedProperty(paths, i, String.class);
+
+                    if(!path.endsWith("/")){
+                      path += "/";
+                    }
+
+                    URI u =  new URI(path);
+                    if (!u.isAbsolute()) {
+                      u = new File(path).toURI().resolve("");
+                    }
+                    u = u.resolve(moduleId);
+
+                    if(new File(u).exists()) {
+                      uri = u;
+                    }
+                  }
+                }
+
                 // If loading from classpath get a proper URI
                 // Must check for each possible file to avoid getting other folders
                 // Could also use getResources and iterate
                 if(uri == null) {
+
                   URL url =  cl.getResource(moduleId + File.separator + "package.json");
                   if( url == null){
                     url = cl.getResource(moduleId + File.separator + "index.json");
@@ -149,6 +183,9 @@ public class RhinoVerticle extends Verticle {
                   // Allow loading modules from <dir>/<main>.js
                   File mainFile = new File(uri.getPath(), main);
                   if (mainFile.exists()) {
+
+                    addNodeModulesPath(cx, uri, paths);
+
                     uri = mainFile.toURI();
                   }
 
@@ -157,6 +194,14 @@ public class RhinoVerticle extends Verticle {
                 return super.getModuleScript(cx, moduleId, uri, paths);
               }
             });
+
+    rb.setPreExec(new Script() {
+      @Override
+      public Object exec(Context context, Scriptable scope) {
+        String js = "__dirname = module.uri.substring(\"file:\".length, module.uri.lastIndexOf('/'))";
+        return context.evaluateString(scope, js,"preExec",1,null);
+      }
+    });
 
     // Force export of vertxStop
     rb.setPostExec(new Script() {

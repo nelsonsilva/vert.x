@@ -1,4 +1,2 @@
-env: 
-  - JAVA_HOME=/opt/jdk/jdk1.7.0
-  - JAVACMD=/opt/jdk/jdk1.7.0/bin/java
+
 
